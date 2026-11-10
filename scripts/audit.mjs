@@ -3,7 +3,9 @@
 // screenshots problem areas, writes <out>/report.json and prints markdown tables.
 // Usage: node audit.mjs <url> [--scope ".sel"] [--scale 4,8,16,24,32,48] [--container 1200]
 //                       [--viewports 1440,1024,768,390] [--out ./layout-audit] [--tolerance 1]
-// Needs `playwright` or `playwright-core` resolvable (set PLAYWRIGHT_PATH to its folder if not).
+// Needs `playwright` or `playwright-core` resolvable from the script or the
+// project cwd (set PLAYWRIGHT_PATH to the package folder — the dir containing
+// its package.json — if neither resolves).
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -27,11 +29,16 @@ const outDir = path.resolve(opt('out', './layout-audit'));
 fs.mkdirSync(outDir, { recursive: true });
 
 const require = createRequire(import.meta.url);
+const requireCwd = createRequire(path.join(process.cwd(), 'noop.js'));
 let pw;
 for (const p of [process.env.PLAYWRIGHT_PATH, 'playwright', 'playwright-core'].filter(Boolean)) {
   try { pw = require(p); break; } catch {}
 }
-if (!pw) { console.error('playwright not found. npm i playwright, or set PLAYWRIGHT_PATH.'); process.exit(2); }
+for (const p of ['playwright', 'playwright-core']) {
+  if (pw) break;
+  try { pw = requireCwd(p); break; } catch {}
+}
+if (!pw) { console.error('playwright not found. npm i playwright in the project, or set PLAYWRIGHT_PATH=<playwright package dir>.'); process.exit(2); }
 
 const measure = fs.readFileSync(path.join(here, 'measure.js'), 'utf8');
 let browser;
@@ -40,8 +47,16 @@ try { browser = await pw.chromium.launch(exe ? { executablePath: exe } : {}); }
 catch (e) { browser = await pw.chromium.launch({ channel: 'chrome' }).catch(() => { console.error(e.message.split('\n')[0] + '\nTry: npx playwright install chromium, or --chrome <path>'); process.exit(2); }); }
 const report = { url, cfg, viewports: {} };
 
+try {
 for (const width of viewports) {
-  const ctx = await browser.newContext({ viewport: { width, height: 900 } });
+  let ctx;
+  try {
+    ctx = await browser.newContext({ viewport: { width, height: 900 } });
+  } catch (e) {
+    report.viewports[width] = { error: String(e && e.message || e) };
+    continue;
+  }
+  try {
   const page = await ctx.newPage();
   await page.goto(url, { waitUntil: 'load' });
   // trigger lazy content: scroll through once, then back to top
@@ -71,20 +86,34 @@ for (const width of viewports) {
       await loc.scrollIntoViewIfNeeded({ timeout: 1500 });
       const box = await loc.boundingBox();
       if (!box) continue;
+      // boundingBox is viewport-relative; fullPage clip is document-relative —
+      // add the current scroll offset or the shot lands at the wrong y.
+      const off = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
       const file = `${width}-${h.type}-${++n}.png`;
-      await page.screenshot({ path: path.join(outDir, file), clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: Math.min(box.width + 32, width), height: Math.min(box.height + 32, 600) }, fullPage: true });
+      await page.screenshot({ path: path.join(outDir, file), clip: { x: Math.max(0, box.x + off.x - 16), y: Math.max(0, box.y + off.y - 16), width: Math.min(box.width + 32, width), height: Math.min(box.height + 32, 600) }, fullPage: true });
       h.screenshot = file;
       res.issues[h.type].find((i) => i.selector === h.selector && i.sev === 'High').screenshot = file;
     } catch {}
   }
-  await ctx.close();
+  } catch (e) {
+    report.viewports[width] = { error: String(e && e.message || e) };
+  } finally {
+    await ctx.close().catch(() => {});
+  }
 }
-await browser.close();
-fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(report, null, 2));
+} catch (e) {
+  report.error = String(e && e.message || e);
+} finally {
+  try { await browser.close(); } catch {}
+  fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(report, null, 2));
+}
 
-// markdown tables
+// markdown tables (viewports array keeps the documented 1440→390 order —
+// integer-like object keys would iterate ascending)
 const cell = (v) => String(v ?? '').replace(/\|/g, '\\|');
-for (const [w, r] of Object.entries(report.viewports)) {
+for (const w of viewports) {
+  const r = report.viewports[w];
+  if (!r || !r.stats) { console.log(`\n## ${w}px  — failed: ${r && r.error || report.error || 'unknown'}`); continue; }
   console.log(`\n## ${w}px  (${r.stats.elements} elements, ${r.stats.groups} sibling groups)\n`);
   console.log('| Severity | Issue type | Selector | Expected | Actual | Difference |\n|---|---|---|---|---|---|');
   for (const [type, list] of Object.entries(r.issues)) {

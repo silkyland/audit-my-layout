@@ -14,7 +14,7 @@ description: >-
   off-grid spacing, horizontal scroll or responsive layout drift, or when the
   user mentions audit-my-layout or /audit-my-layout.
 license: MIT
-argument-hint: "<url> [scope selector] [--scale 4,8,16,24,32,48] [--container 1200]"
+argument-hint: "<url> [--scope sel] [--scale 4,8,16,24,32,48] [--container 1200]"
 ---
 
 # Audit My Layout
@@ -33,7 +33,6 @@ from the declared design system.
 | Viewports | 1440, 1024, 768, 390 |
 | Spacing scale | none → the scale check is skipped and reported as skipped |
 | Container max-width | none → container check covers viewport overflow only |
-| Grid (columns/gutter) | none → report gutters found, do not judge them |
 
 ## Rules
 
@@ -55,10 +54,12 @@ node scripts/audit.mjs <url> --scope ".product-grid" \
 
 It resizes per viewport, scrolls through once to trigger lazy content, waits for
 `document.fonts.ready`, images and network idle, runs `scripts/measure.js`,
-screenshots the page and each High issue, and writes `report.json` plus the
-markdown tables. Needs Playwright (`PLAYWRIGHT_PATH=<folder>` if it is not
-resolvable; `--chrome <path>` or `CHROME_PATH` if its bundled browser is missing;
-it falls back to installed Chrome).
+screenshots the page and each High issue (up to 6), and writes `report.json`
+plus the markdown tables. Full flag set: `--scope`, `--scale`, `--container`,
+`--viewports`, `--tolerance`, `--out`, `--chrome`. Needs Playwright
+(`PLAYWRIGHT_PATH=<the playwright package dir>` if it is not resolvable from
+the script or the project; `--chrome <path>` or `CHROME_PATH` if its bundled
+browser is missing; it falls back to installed Chrome).
 
 ### 2. Or drive a browser tool yourself (Chrome / built-in browser MCP)
 
@@ -86,13 +87,20 @@ reproduce.
 | Container | `scrollWidth` vs viewport; elements outside viewport not clipped by an overflow ancestor; direct content wider than `--container` | any |
 | Typography | role = tag + parent component class | minority font-size, weight or line-height |
 
-Severity: **High** ≥4px or breaks layout (horizontal scroll, outside viewport);
-**Medium** 2–3px, off-scale, or weight mismatch; **Low** 1px.
+Severity: **High** ≥4px difference or horizontal scroll; **Medium** 2–3px,
+off-scale, weight mismatch, or smaller container overflow; **Low** 1px.
+All checks flag at `diff ≥ tolerance` (default 1px).
 
 Known limits (state them in the report when relevant): a group with only two
 gaps and no majority is not judged for spacing (caught by the scale check
 instead); transforms and sub-pixel rounding can produce ±0.5px noise, hence the
-1px tolerance; hidden, zero-size and `position:fixed` elements are excluded.
+tolerance; hidden, zero-size, `position:fixed` and `position:absolute`
+elements are excluded from sibling grouping (children of `display:contents`
+wrappers group under the nearest visible ancestor instead); a scope selector
+that matches nothing falls back to `body` and `scopeResolved` in the report
+says so; typography "role" is tag + parent's first class only, so the same
+classes in different DOM order can split a role; iframe/canvas/video and
+shadow-root contents are unmeasurable.
 
 ## Output
 
@@ -121,4 +129,5 @@ Then:
 - `scripts/measure.js` — in-page collector, browser-agnostic, returns JSON.
 - `scripts/audit.mjs` — Playwright runner over all viewports with screenshots.
 - `assets/fixture.html` — page with seeded defects; run the audit on it to
-  confirm the tool still detects off-scale margin, font-size drift, and overflow.
+  confirm the tool still detects off-scale margin, font-size drift, and
+  overflow: `node scripts/audit.mjs "file://$PWD/assets/fixture.html"`.

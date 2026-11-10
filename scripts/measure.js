@@ -7,7 +7,9 @@
     { scope: 'body', scale: null, containerMax: null, tolerance: 1, cap: 60 },
     window.__LAYOUT_AUDIT_CONFIG || {}
   );
-  const root = document.querySelector(cfg.scope) || document.body;
+  let scoped = null;
+  try { scoped = document.querySelector(cfg.scope); } catch {}
+  const root = scoped || document.body;
   const vw = document.documentElement.clientWidth;
   const r1 = (n) => Math.round(n * 10) / 10;
   const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'LINK', 'META', 'BR', 'TEMPLATE', 'SOURCE', 'TRACK']);
@@ -61,8 +63,11 @@
   // ---- sibling groups
   const parents = new Map();
   for (const el of visible) {
-    const p = el.parentElement;
-    if (!p || !vset.has(p) && p !== root) continue;
+    // group under the nearest VISIBLE ancestor — display:contents wrappers
+    // and zero-size parents are skipped, not allowed to orphan their kids
+    let p = el.parentElement;
+    while (p && !vset.has(p)) p = p.parentElement;
+    if (!p) continue;
     const pos = style(el).position;
     if (pos === 'absolute') continue;
     if (!parents.has(p)) parents.set(p, []);
@@ -89,14 +94,14 @@
     if (hg.length >= 2) {
       const m = mode(hg.map((g) => Math.round(g.gap)));
       stats.gapsChecked += hg.length;
-      if (hg.filter((g) => Math.abs(g.gap - m) <= tol).length >= 2) hg.forEach((g) => { const d = Math.abs(g.gap - m); if (d > tol) push('spacing', { sev: sev(d), selector: sel(g.it.el), group: pSel, axis: 'horizontal', expected: m, actual: r1(g.gap), diff: r1(d) }); });
+      if (hg.filter((g) => Math.abs(g.gap - m) <= tol).length >= 2) hg.forEach((g) => { const d = Math.abs(g.gap - m); if (d >= tol) push('spacing', { sev: sev(d), selector: sel(g.it.el), group: pSel, axis: 'horizontal', expected: m, actual: r1(g.gap), diff: r1(d) }); });
     }
     // vertical gaps between rows
     if (rows.length >= 4) {
       const vg = rows.slice(1).map((rw, i) => ({ rw, gap: rw.top - rows[i].bottom }));
       const m = mode(vg.map((g) => Math.round(g.gap)));
       stats.gapsChecked += vg.length;
-      if (vg.filter((g) => Math.abs(g.gap - m) <= tol).length >= 2) vg.forEach((g) => { const d = Math.abs(g.gap - m); if (d > tol) push('spacing', { sev: sev(d), selector: sel(g.rw.items[0].el), group: pSel, axis: 'vertical', expected: m, actual: r1(g.gap), diff: r1(d) }); });
+      if (vg.filter((g) => Math.abs(g.gap - m) <= tol).length >= 2) vg.forEach((g) => { const d = Math.abs(g.gap - m); if (d >= tol) push('spacing', { sev: sev(d), selector: sel(g.rw.items[0].el), group: pSel, axis: 'vertical', expected: m, actual: r1(g.gap), diff: r1(d) }); });
     }
 
     // alignment within a row: top / center / bottom edges (one of them should be shared)
@@ -214,9 +219,9 @@
   const capped = {}, truncated = {};
   const order = { High: 0, Medium: 1, Low: 2 };
   for (const k of Object.keys(out)) {
-    out[k].sort((a, b) => order[a.sev] - order[b.sev] || (b.diff || 0) - (a.diff || 0));
+    out[k].sort((a, b) => order[a.sev] - order[b.sev] || (parseFloat(b.diff) || 0) - (parseFloat(a.diff) || 0));
     truncated[k] = Math.max(0, out[k].length - cfg.cap);
     capped[k] = out[k].slice(0, cfg.cap);
   }
-  return { viewport: { width: vw, height: innerHeight, dpr: devicePixelRatio }, scope: cfg.scope, config: { scale: cfg.scale, containerMax: cfg.containerMax, tolerance: tol }, stats, counts: Object.fromEntries(Object.keys(out).map((k) => [k, out[k].length])), truncated, issues: capped, unmeasurable };
+  return { viewport: { width: vw, height: innerHeight, dpr: devicePixelRatio }, scope: cfg.scope, scopeResolved: scoped ? (scoped === document.body ? 'body' : sel(scoped)) : 'body — scope selector matched nothing', config: { scale: cfg.scale, containerMax: cfg.containerMax, tolerance: tol }, stats, counts: Object.fromEntries(Object.keys(out).map((k) => [k, out[k].length])), truncated, issues: capped, unmeasurable };
 })();
